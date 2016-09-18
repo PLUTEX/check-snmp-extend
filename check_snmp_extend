@@ -1,0 +1,128 @@
+#! /usr/bin/env bash
+# 2016, Paul PLUTEX <info@plutex.de>.
+# All rights reserved.
+
+# Redistribution and use in source and binary forms, with or without modification, are
+# permitted provided that the following conditions are met:
+#
+# * Redistributions of source code must retain the above copyright notice, this list of
+#   conditions and the following disclaimer.
+#
+# * Redistributions in binary form must reproduce the above copyright notice, this list
+#   of conditions and the following disclaimer in the documentation and/or other materials
+#   provided with the distribution.
+#
+# * The names of its contributors may not be used to endorse or promote products derived
+#   from this software without specific prior written permission.
+#
+# * Feel free to send Club Mate to support the work.
+#
+# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS
+# OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY
+# AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDERS
+# AND CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+# CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+# SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+# THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
+# OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+# POSSIBILITY OF SUCH DAMAGE.
+
+# Set PATH to save default
+PATH=/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin
+
+# Default states
+declare -i STATE_OK=0
+declare -i STATE_WARNING=1
+declare -i STATE_CRITICAL=2
+declare -i STATE_UNKNOWN=3
+
+# Initialize status variable
+declare -i ERR_CODE=$STATE_OK
+
+# Initialize error variable
+ERR_MSG=''
+
+# Initialize error variable
+SNMP_HOST=''
+SNMP_PORT=''
+SNMP_VERSION=''
+SNMP_COMMUNITY=''
+SNMP_TIMEOUT=''
+CHECK_NAME=''
+
+# Parse arguments
+for ARG in "$@"; do
+  if [ "$ARG" = '-h' -o "$ARG" = '--help' ]; then
+    show_help
+  elif [[ "$ARG" =~ ^--host= ]]; then
+    SNMP_HOST="${ARG#--host=}"
+  elif [[ "$ARG" =~ ^--port= ]]; then
+    SNMP_PORT="${ARG#--port=}"
+  elif [[ "$ARG" =~ ^--version= ]]; then
+    SNMP_VERSION="${ARG#--version=}"
+  elif [[ "$ARG" =~ ^--community= ]]; then
+    SNMP_COMMUNITY="${ARG#--community=}"
+  elif [[ "$ARG" =~ ^--timeout= ]]; then
+    SNMP_TIMEOUT="${ARG#--timeout=}"
+  elif [[ "$ARG" =~ ^--check= ]]; then
+    CHECK_NAME="${ARG#--check=}"
+  fi
+done
+
+# Check if all needed arguments are giving
+if [ -z "$SNMP_HOST" ]; then
+  echo "You've missed --host=" >&2
+  exit $STATE_UNKNOWN
+elif [ -z "$SNMP_VERSION" ]; then
+  echo "You've missed --version=" >&2
+  exit $STATE_UNKNOWN
+elif [ -z "$SNMP_COMMUNITY" ]; then
+  echo "You've missed --community=" >&2
+  exit $STATE_UNKNOWN
+elif [ -z "$SNMP_TIMEOUT" ]; then
+  echo "You've missed --timeout=" >&2
+  exit $STATE_UNKNOWN
+elif [ -z "$CHECK_NAME" ]; then
+  echo "You've missed --check=" >&2
+  exit $STATE_UNKNOWN
+fi
+
+# Check for needed binaries
+if ! which snmpget >/dev/null 2>&1; then
+  echo 'You need snmpget to be installed' >&2
+  exit $STATE_UNKNOWN
+fi
+
+# Check if port is given
+if [ -n "$SNMP_PORT" ]; then
+  SNMP_HOST="${SNMP_HOST}:${SNMP_PORT}"
+fi
+
+# Workaround for IPv6
+if [ $(grep -o ':' <<<"$SNMP_HOST" | wc -l) -gt 1 ]; then
+  SNMP_HOST="udp6:[${SNMP_HOST}]"
+fi
+
+# Get plugin output via SNMP
+ERR_MSG="$(snmpget -v${SNMP_VERSION} -t ${SNMP_TIMEOUT} -c ${SNMP_COMMUNITY} -OvQ ${SNMP_HOST} NET-SNMP-EXTEND-MIB::nsExtendOutputFull.\"${CHECK_NAME}\" 2>&1)"
+STATUS="$(cut -d':' -f1 <<<"$ERR_MSG")"
+
+# State type messages
+if grep -q UNKNOWN <<<"$STATUS"; then
+  ERR_CODE=$STATE_UNKNOWN
+elif grep -q WARNING <<<"$STATUS"; then
+  ERR_CODE=$STATE_WARNING
+elif grep -q CRITICAL <<<"$STATUS"; then
+  ERR_CODE=$STATE_CRITICAL
+elif grep -q OK <<<"$STATUS"; then
+  ERR_CODE=$STATE_OK
+else
+  ERR_CODE=$STATE_UNKNOWN
+  ERR_MSG="UNKNOWN: SNMP returned unparsable status: $RESULT"
+fi
+
+# Display error message
+echo "$ERR_MSG"
+
+# Exit with error code
+exit $ERR_CODE
